@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>English Teacher</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0b1220;color:#fff;font:20px system-ui,sans-serif;padding:16px;min-height:100vh}
+.screen{display:flex;flex-direction:column;gap:14px;max-width:640px;margin:0 auto}
+.hidden{display:none!important}
+h1{font-size:28px;margin:8px 0}
+h2{font-size:22px;margin:18px 0 6px}
+p{margin:4px 0;line-height:1.4}
+button{font:bold 22px system-ui;padding:18px;border:0;border-radius:16px;background:#ffd400;color:#000;width:100%;min-height:64px}
+button.green{background:#2ecc71}
+button.red{background:#e74c3c;color:#fff}
+button.gray{background:#33415c;color:#fff}
+button.big{min-height:120px;font-size:26px}
+button.small{font-size:18px;padding:10px;min-height:44px;width:auto}
+button:focus-visible,input:focus-visible,h1:focus-visible{outline:4px solid #7dd3fc;outline-offset:2px}
+h1:focus{outline:none}
+label{display:block;margin-top:10px}
+input{width:100%;font-size:20px;padding:12px;margin:6px 0 10px;border-radius:10px;border:2px solid #556;background:#111a2e;color:#fff}
+#cap{font-size:28px;line-height:1.45;padding:12px;border:2px solid #33415c;border-radius:14px;min-height:150px;max-height:48vh;overflow:auto;word-break:break-word}
+#callStatus{font-size:22px;color:#7dd3fc}
+.note{color:#ffd400}
+ul{padding-left:20px;margin:6px 0}
+li{margin:8px 0}
+li button{margin-left:8px}
+dl{margin:6px 0}
+dt{font-weight:bold;margin-top:8px}
+dd{margin:2px 0 0 0}
+.status{color:#2ecc71;min-height:1.4em}
+</style></head><body>
+
+<main id="home" class="screen">
+  <h1 id="homeTitle" tabindex="-1">English Teacher</h1>
+  <p id="greet"></p>
+  <p id="nextCall"></p>
+  <p id="homeNote" class="note"></p>
+  <button id="btnCall" class="green big" type="button">Call the teacher</button>
+  <button id="btnReport" type="button">My learning report</button>
+  <button id="btnSettings" class="gray" type="button">Settings</button>
+</main>
+
+<main id="incoming" class="screen hidden">
+  <h1 id="incTitle" tabindex="-1">Incoming call</h1>
+  <p id="incWho"></p>
+  <button id="btnAnswer" class="green big" type="button">Answer</button>
+  <button id="btnNotNow" class="red" type="button">Not now</button>
+</main>
+
+<main id="call" class="screen hidden">
+  <h1 id="callTitle" tabindex="-1">On call with your teacher</h1>
+  <p id="callStatus"></p>
+  <div id="cap"></div>
+  <button id="btnHW" class="hidden" type="button">Homework done</button>
+  <button id="btnPause" class="gray" type="button">Pause</button>
+  <button id="btnEnd" class="red" type="button">End call</button>
+</main>
+
+<main id="report" class="screen hidden">
+  <h1 id="repTitle" tabindex="-1">My learning report</h1>
+  <p>This is everything your teacher has noted about you. You can remove any note.</p>
+  <h2>About you</h2>
+  <dl id="repProfile"></dl>
+  <h2>Call schedule</h2>
+  <p id="repSchedule"></p>
+  <button id="btnClearSched" class="gray hidden" type="button">Clear schedule</button>
+  <h2>Teacher's notes</h2>
+  <ul id="repNotes"></ul>
+  <h2>Past lessons</h2>
+  <ul id="repSessions"></ul>
+  <button id="btnRepBack" type="button">Back</button>
+</main>
+
+<main id="settings" class="screen hidden">
+  <h1 id="setTitle" tabindex="-1">Settings</h1>
+  <label for="inKey">Gemini API key</label>
+  <input id="inKey" type="password" autocomplete="off">
+  <label for="inModel">Gemini model</label>
+  <input id="inModel" type="text" autocomplete="off" autocapitalize="none">
+  <p id="setStatus" class="status" role="status" aria-live="polite"></p>
+  <button id="btnSave" class="green" type="button">Save</button>
+  <button id="btnBattery" class="gray" type="button">Allow background calls</button>
+  <button id="btnWipe" class="red" type="button">Delete my learning data</button>
+  <button id="btnSetBack" type="button">Back</button>
+</main>
+
+<script>
+(()=>{
+"use strict";
+const DEFAULT_MODEL="gemini-3.1-flash-live-preview";
+const WS_URL="wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=";
+const $=id=>document.getElementById(id);
+const hasApp=typeof AndroidApp!=="undefined", hasTTS=typeof AndroidTTS!=="undefined";
+const LSK="et_data_v1";
+const NOTE_MAX=80, SESS_MAX=20;
+
+// ---------------- stored data (kept on this phone only) ----------------
+function blank(){return {key:"",model:"",profile:{},schedule:[],notes:[],sessions:[],count:0}}
+function load(){try{const j=JSON.parse(localStorage.getItem(LSK)||"null");return Object.assign(blank(),j||{})}catch{return blank()}}
+let D=load();
+function save(){try{localStorage.setItem(LSK,JSON.stringify(D))}catch{}}
+const modelName=()=>(D.model||"").trim()||DEFAULT_MODEL;
+
+// ---------------- screens ----------------
+const SCREENS=["home","incoming","call","report","settings"];
+function show(id){
+  SCREENS.forEach(s=>$(s).classList.toggle("hidden",s!==id));
+  const h=$(id).querySelector("h1"); if(h) h.focus();
+  window.scrollTo(0,0);
+}
+const DAYNAME=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+function fmtTime(h,m){const ap=h>=12?"PM":"AM";const hh=h%12||12;return hh+":"+String(m).padStart(2,"0")+" "+ap}
+function scheduleText(){
+  if(!D.schedule.length) return "No call scheduled yet. Your teacher will fix it with you while talking.";
+  return D.schedule.map(s=>{
+    const d=s.days.length===7?"Every day":s.days.map(x=>DAYNAME[x-1].slice(0,3)).join(", ");
+    return d+" at "+fmtTime(s.h,s.m);
+  }).join("; ");
+}
+function refreshHome(){
+  const n=D.profile.user_name_en||D.profile.user_name;
+  $("greet").textContent=n?("Hello, "+n+"!"):"Hello!";
+  let next="";
+  if(hasApp&&D.schedule.length){
+    const ms=Number(AndroidApp.nextCall());
+    if(ms>0) next="Next call: "+new Date(ms).toLocaleString("en-IN",{weekday:"long",hour:"numeric",minute:"2-digit"});
+  }
+  $("nextCall").textContent=next||"";
+  if(!D.key.trim()) $("homeNote").textContent="First open Settings and add your Gemini API key.";
+  else if(!D.count) $("homeNote").textContent="Press the green button to meet your teacher.";
+  else $("homeNote").textContent="";
+}
+function goHome(msg){refreshHome(); if(msg) $("homeNote").textContent=msg; show("home")}
+
+// ---------------- speech out ----------------
+let curRate=1, buf="", cap="", raw="", newTurn=true, muted=false, turnText="";
+function spellFix(t){
+  return t.replace(/\b[A-Z](?:\s*[-,\u2013]\s*|\s+)[A-Z](?:(?:\s*[-,\u2013]\s*|\s+)[A-Z])*\b/g,m=>m.replace(/[^A-Z]/g,"").split("").join(", "));
+}
+function cleanForSpeech(t){return spellFix(t.replace(/[*_#`~>|]/g," ")).replace(/\s+/g," ").trim()}
+function splitRuns(t){
+  const parts=t.split(/(\s+)/), runs=[]; let cur="",lang=null;
+  for(const p of parts){
+    if(!p) continue;
+    const l=/[\u0900-\u097F]/.test(p)?"hi":(/[A-Za-z]/.test(p)?"en":null);
+    if(l&&lang&&l!==lang){runs.push(cur);cur=""}
+    if(l) lang=l;
+    cur+=p;
+  }
+  if(cur.trim()) runs.push(cur);
+  return runs;
+}
+function speakText(t){
+  t=cleanForSpeech(t); if(!t) return;
+  for(const r of splitRuns(t)){ if(r.trim()&&hasTTS) AndroidTTS.speak(r.trim(),curRate) }
+}
+function hush(){ if(hasTTS) AndroidTTS.stop() }
+function ttsBusy(){ return hasTTS?AndroidTTS.busy():false }
+function setCap(t){$("cap").textContent=t}
+function emit(t){
+  if(muted||paused||!t) return;
+  if(newTurn){cap="";newTurn=false;turnText=""}
+  buf+=t; cap+=t; turnText+=t; setCap(cap.trim());
+  let m;
+  while((m=buf.match(/^[\s\S]{30,}?[.!?\u0964\n]/))){ speakChunk(m[0]); buf=buf.slice(m[0].length) }
+}
+let lastBackchannel=0;
+function speakChunk(s){
+  if(hw){
+    // In homework mode the teacher must stay nearly silent: only one short acknowledgement every few seconds.
+    const short=s.trim().length<60&&!/\?/.test(s);
+    if(short&&Date.now()-lastBackchannel<10000) return;
+    if(short) lastBackchannel=Date.now();
+  }
+  speakText(s);
+}
+function flushTurn(){
+  if(buf.trim()) speakChunk(buf);
+  buf=""; if(turnText.trim()) logConvo("teacher",turnText.trim());
+  newTurn=true; turnText="";
+}
+
+// ---------------- command tags from the teacher ----------------
+const DAYKEY={sun:1,mon:2,tue:3,wed:4,thu:5,fri:6,sat:7,sunday:1,monday:2,tuesday:3,wednesday:4,thursday:5,friday:6,saturday:7};
+function feed(t){
+  raw+=t;
+  for(;;){
+    const i=raw.indexOf("[[");
+    if(i<0){
+      if(raw.endsWith("[")){emit(raw.slice(0,-1));raw="["}else{emit(raw);raw=""}
+      return;
+    }
+    if(i>0){emit(raw.slice(0,i));raw=raw.slice(i)}
+    const e=raw.indexOf("]]");
+    if(e<0){ if(raw.length>2500){emit(raw);raw=""} return }
+    const tag=raw.slice(2,e); raw=raw.slice(e+2);
+    if(buf.trim()){ speakChunk(buf); buf="" } // speak the words before the tag under the old settings
+    try{handleTag(tag)}catch(err){}
+  }
+}
+function parseDays(d){
+  if(d==="daily"||d==="everyday"||d==="every day") return [1,2,3,4,5,6,7];
+  if(d==="weekdays") return [2,3,4,5,6];
+  if(d==="weekends") return [1,7];
+  if(Array.isArray(d)){const o=[...new Set(d.map(x=>DAYKEY[String(x).toLowerCase()]).filter(Boolean))];return o.length?o:null}
+  return null;
+}
+let summaryGot=false, sessionSummary="", endRequested=false;
+function handleTag(tag){
+  const m=tag.trim().match(/^([A-Z_]+)\s*([\s\S]*)$/); if(!m) return;
+  const name=m[1], arg=m[2].trim();
+  switch(name){
+    case "PROFILE":{
+      let o; try{o=JSON.parse(arg)}catch{return}
+      if(!o||typeof o!=="object") return;
+      for(const k of Object.keys(o).slice(0,12)){
+        if(!/^[a-z_]{2,30}$/.test(k)) continue;
+        D.profile[k]=String(o[k]).slice(0,80);
+      }
+      save(); if(hasApp) AndroidApp.setCaller(D.profile.teacher_name||"");
+      break;}
+    case "SCHEDULE":{
+      let o; try{o=JSON.parse(arg)}catch{o=null}
+      const days=o&&parseDays(o.days), tm=o&&String(o.time||"").match(/^(\d{1,2}):(\d{2})$/);
+      const h=tm?+tm[1]:-1, mi=tm?+tm[2]:-1;
+      if(!days||h<0||h>23||mi<0||mi>59){
+        sendText("[APP] The schedule tag was invalid and NOT saved. Ask the user again for the days and exact time (AM or PM), then repeat the tag correctly.");
+        break;
+      }
+      D.schedule=[{days,h,m:mi}]; save();
+      if(hasApp) AndroidApp.setSchedule(JSON.stringify(D.schedule.map(s=>({days:s.days,h:s.h,m:s.m}))));
+      break;}
+    case "SCHEDULE_CLEAR":
+      D.schedule=[]; save(); if(hasApp) AndroidApp.setSchedule("[]"); break;
+    case "HOMEWORK_START": startHomework(); break;
+    case "BREAK": pendingBreak=true; break;
+    case "RATE":{ const r=parseFloat(arg); if(r>=0.5&&r<=1.2) curRate=r; break;}
+    case "NOTE":{
+      const t=arg.replace(/\s+/g," ").slice(0,300); if(!t) break;
+      D.notes.push({t,d:new Date().toISOString().slice(0,10)});
+      if(D.notes.length>NOTE_MAX) D.notes=D.notes.slice(-NOTE_MAX);
+      save(); break;}
+    case "SUMMARY":
+      sessionSummary=arg.replace(/\s+/g," ").slice(0,1200); summaryGot=true; break;
+    case "END_CALL": endRequested=true; break;
+  }
+}
+
+// ---------------- conversation log (used if the connection drops) ----------------
+let convo=[];
+function logConvo(w,t){
+  t=String(t||"").trim(); if(!t) return;
+  const l=convo[convo.length-1];
+  if(l&&l.w===w&&w==="user") l.t+=" "+t; else convo.push({w,t});
+  if(convo.length>24) convo=convo.slice(-24);
+}
+
+// ---------------- teacher instructions ----------------
+const BASE_PROMPT=`You are a warm, patient, experienced English teacher speaking with ONE adult learner over a voice call. The learner is a total beginner in English who understands a little but wants to learn from the very beginning. The learner's first language is Hindi. You LEAD every lesson. The learner may ask questions and may say what they would like to learn, but you decide the path, the method and the pace.
+
+HOW YOU SPEAK
+- Speak simple, natural, spoken Hindi (Devanagari script for Hindi words). Write English teaching words and sentences in normal Latin letters. Never write English words in Devanagari.
+- Keep Hindi and English in separate sentences where you can. Give the English sentence, then explain in Hindi. As the learner improves, use more English and less Hindi, slowly.
+- Plain spoken text only: no markdown, no lists, no emoji, no stars, no headings. Short turns: usually 1 to 3 short sentences, then let the learner speak. Ask one thing at a time. The learner should speak at least half of the time.
+- Use the correct Hindi gender forms for yourself (teacher_gender) and for the learner (user_gender) once known. Address the learner by their name from time to time, not in every sentence.
+- Your voice is read by a text-to-speech engine. To spell a word, write the letters as capital letters separated by commas, for example: S, P, E, L, L. Say the word, then the letters slowly, then the word again.
+
+WHAT YOU TEACH
+- Everyday sentences for real life, organised by situations: greetings, introducing yourself, family, home, morning routine, food, market and shopping, shop and business talk, phone calls, asking directions, travel, bank, doctor, friends, work. Teach ready-made useful sentences first, then swap words to make new sentences (patterns). Add the sound and the spelling of key words.
+- Each lesson: quick revision of earlier words (use your saved notes), a small new part (about 5 to 7 items), speaking practice, then homework near the end.
+- Watch the mistakes typical for Hindi speakers: v/w, th, sh/s, word endings, a/the, word order (verb at the end in Hindi, in the middle in English), prepositions.
+- YOU choose the method every time from the learner's whole progress in your notes: direct teaching, question and answer, games (word chain, guess who I am, fill in the blank, quick-fire questions, points), role-play (you play the shopkeeper or doctor, the learner plays the customer or patient), repetition, storytelling. If something is not working, change it quietly. Do not explain why you changed.
+- Make it personal and close: you may ask about their life (who lives at home, what they do after waking up, when they go to the shop or work) and build practice sentences from the answers. If the learner skips a question, drop it and move on. Never press on painful topics. Save useful personal facts with a NOTE tag.
+- Read the learner's mood and energy from their answers (shorter answers, long silences, more errors mean tired or bored; quick answers mean keen). Adapt: lighter and shorter when tired, slightly harder when keen. Never diagnose or comment on anyone's mental state.
+
+ANSWERING THE LEARNER
+- If the learner asks anything, you must answer it completely, at once, in simple Hindi, then get back to your lesson.
+- If the learner asks how to spell a word, you must spell it: set [[RATE 0.7]], say the word, spell it letter by letter slowly, say the word again, ask them to repeat it, then [[RATE 1]].
+- If the learner says they are writing something, dictate slowly like a school teacher: [[RATE 0.7]], small pieces, wait for them, then check when they say they are ready.
+- If you did not understand the audio, ask them to say it again. Never invent what they said.
+
+FEEDBACK, PRAISE AND CORRECTION
+- Never say "wrong" or "mistake" to the learner and never blame. Correct by saying the right sentence clearly, showing which small part changed, and asking them to repeat it.
+- Praise only what is really true and specific from this session or your notes (a word they now say well, a sentence they built alone, that they came on time). Never give false or inflated praise. Do not praise every answer; a short "ठीक" or "सही" is enough in between.
+- At the start of homework and at the end of the session give short honest feedback in three parts: one real small achievement, one specific soft next step (for example: "बस three, very और water की आवाज़ पर थोड़ा और ध्यान दे दीजिए"), and warm confidence in them ("मुझे यक़ीन है आप कर लेंगे"). Say what to do, never just "work harder". Keep the tone gentle so it never hurts.
+
+HOMEWORK
+- Give short, clear homework (for example: say 4 sentences about your morning using today's words). Then say clearly that you will now listen, tell them to speak the whole homework and that you will stay quiet, and output [[HOMEWORK_START]].
+- While the homework runs, stay almost silent. After each pause reply with ONLY a tiny acknowledgement of 2 to 4 words in Hindi, such as "जी, मैं सुन रहा हूँ" (use your own gender form). Do not correct anything now. Exception: if the learner asks a question, or how to spell something, or what a word means, answer it fully first, then say "जी, आगे बोलिए".
+- The app tells you when the learner has finished with a message starting with [APP] that contains an automatic transcript (it can contain errors, so also trust what you heard). Then check the homework carefully: give the right versions of the sentences that need it (at most 3 corrections), gently, using the feedback rules.
+
+SESSIONS, TIME AND CARE
+- There is no fixed session length. You decide when to end, from the learner's energy and attention. New learners get short sessions (about 8 to 12 minutes at first), growing slowly over the weeks. Never cut the call abruptly: finish the thought, give the feedback, give or check the homework, say a warm goodbye.
+- To end: say goodbye, output [[SUMMARY ...]], then [[END_CALL]] as the very last tag. If the learner says they want to stop, wrap up kindly in the same way.
+- From time to time, especially in longer sessions, show simple care: ask whether they would like some water or a short rest or need anything. If yes, say a kind sentence and output [[BREAK]].
+- If the learner is silent for a long time the app will tell you with an [APP] message. Then gently prompt, repeat the question more simply, or continue leading.
+
+FIRST MEETING (only when the memory says onboarding is needed)
+- Greet warmly and say you will be happy to teach them. Ask what you should call them. Confirm the English spelling of the name by spelling it back. Then ask what name they would like to give you and whether you should be a male or a female teacher. Then ask their own gender in a natural way (you need it for correct Hindi). One question at a time. When all are confirmed output [[PROFILE {...}]] once. Then start a short first lesson (greetings and introducing yourself), with slow speaking.
+
+CALL SCHEDULE
+- Never ask about the schedule at the very start. After the learner has enjoyed part of a lesson (in the first or second session), ask naturally when in the day they are usually free and for how long they want to study each day, and on which days. Confirm the days and the exact time in words including morning or evening. When the learner clearly agrees, output [[SCHEDULE ...]] and say for example "ठीक है, मैं आपको रोज़ शाम सात बजे कॉल करूँगा". The learner can change or cancel it by voice at any time.
+
+COMMAND TAGS (the app reads them, the learner never hears them; never speak them, never explain them; put each tag alone after the sentence it belongs to)
+[[PROFILE {"user_name":"मोबीन","user_name_en":"Mobeen","user_gender":"male","teacher_name":"Aisha","teacher_gender":"female"}]] : save what you learned after the learner confirmed; only include the keys you know; genders are "male" or "female".
+[[SCHEDULE {"days":"daily","time":"19:00"}]] : days is "daily", "weekdays", or a list like ["mon","wed","fri"]; time is 24-hour HH:MM. Use only after exact agreement.
+[[SCHEDULE_CLEAR]] : cancel the call schedule.
+[[HOMEWORK_START]] : right after you told the learner to start speaking the homework.
+[[BREAK]] : after the learner agreed to a short break.
+[[RATE 0.7]] : speak more slowly from now on; [[RATE 1]] for normal speed. Allowed values 0.5 to 1.2.
+[[NOTE short text]] : your private teaching note in English, about 25 words at most: weak words, what worked or did not, personal facts given for practice, energy signs. Write notes as things happen.
+[[SUMMARY text]] : once per session, before ending: what you taught (words and sentences), weak spots, homework given, method used and how it worked, learner's energy. About 80 words, English.
+[[END_CALL]] : last thing in the final message, after the goodbye and the SUMMARY.
+
+MESSAGES FROM THE APP
+- Text that starts with [APP] comes from the app, not from the learner. Follow it; do not read it aloud.
+- Be honest: you cannot see the learner, you only hear them. Do not claim things you cannot know.`;
+
+function buildPrompt(){
+  const now=new Date();
+  const last=D.sessions[D.sessions.length-1];
+  let since="first session";
+  if(last){ const d=Math.round((now-new Date(last.date))/86400000); since=d<=0?"earlier today":d+" day(s) ago"; }
+  const onboarding=!D.profile.user_name;
+  const notes=D.notes.slice(-40).map(n=>"- ("+n.d+") "+n.t).join("\n")||"(none yet)";
+  const sess=D.sessions.slice(-8).map(s=>"- Session "+s.n+" ("+s.date.slice(0,10)+", "+s.minutes+" min): "+s.summary).join("\n")||"(none yet)";
+  return BASE_PROMPT+`
+
+=== LEARNER MEMORY (from the app) ===
+Now: ${now.toLocaleString("en-IN",{weekday:"long",day:"numeric",month:"long",hour:"numeric",minute:"2-digit"})}
+This call is session number ${D.count+1}. Last session: ${since}.
+Onboarding needed: ${onboarding?"YES - do the first meeting":"no"}
+Profile: ${JSON.stringify(D.profile)}
+Call schedule: ${D.schedule.length?scheduleText():"none set"}${(!D.schedule.length&&D.count>=1)?" (bring up the schedule naturally in this session)":""}
+Your saved notes:
+${notes}
+Recent session summaries:
+${sess}`;
+}
+function openingMessage(){
+  return "[APP] The call is connected"+(D.profile.user_name?"":" (first meeting)")+". Begin now as the leading teacher.";
+}
+function resumeMessage(){
+  const c=convo.slice(-12).map(x=>(x.w==="teacher"?"Teacher: ":"Learner: ")+x.t).join("\n");
+  return "[APP] The connection dropped for a moment and is back. Continue exactly where you left off. Do not greet again and do not repeat yourself. Homework mode is "+(hw?"ON (stay quiet and listen)":"off")+". Recent conversation (may be incomplete):\n"+(c||"(none)");
+}
+
+// ---------------- call state ----------------
+let inCall=false, ending=false, paused=false, pendingBreak=false, hw=false, hwText="";
+let ws=null, ready=false, tries=0, fullCfg=true, started=false, stream=null, actx=null, proc=null;
+let startTs=0, lastVoice=0, lastTeacherEnd=0, turnActive=false, lastNudge=0, nudges=0, timerId=0;
+
+function send(o){ if(ws&&ws.readyState===1) ws.send(JSON.stringify(o)) }
+function sendText(t){ send({realtimeInput:{text:t}}) }
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function waitFor(fn,ms){const t0=Date.now();while(Date.now()-t0<ms&&!fn()) await sleep(200);return fn()}
+
+function statusText(){
+  if(!inCall) return "";
+  if(ending) return "Ending the call…";
+  if(paused) return "Paused. Press Resume when you are back.";
+  if(!ready) return "Connecting…";
+  if(hw) return "Homework: speak now. Your teacher is listening.";
+  if(ttsBusy()) return "Your teacher is speaking…";
+  return "Listening…";
+}
+
+function gem(mi){
+  const mode=["TEXT","AUDIO"][mi]; ready=false;
+  let sock;
+  try{ sock=new WebSocket(WS_URL+encodeURIComponent(D.key.trim())) }catch(e){ return failCall("Could not open the connection.") }
+  ws=sock;
+  sock.onopen=()=>{
+    const s={model:"models/"+modelName(),generationConfig:{responseModalities:[mode]},systemInstruction:{parts:[{text:buildPrompt()}]}};
+    if(fullCfg){ s.contextWindowCompression={slidingWindow:{}}; s.realtimeInputConfig={activityHandling:"NO_INTERRUPTION"}; s.inputAudioTranscription={}; }
+    if(mode==="AUDIO") s.outputAudioTranscription={};
+    sock.send(JSON.stringify({setup:s}));
+  };
+  sock.onmessage=async e=>{
+    if(sock!==ws) return;
+    let d=e.data; if(d instanceof Blob) d=await d.text();
+    let m; try{m=JSON.parse(d)}catch{return}
+    if(m.setupComplete){
+      ready=true; tries=0; lastVoice=Date.now(); lastTeacherEnd=Date.now();
+      sendText(started?resumeMessage():openingMessage()); started=true; return;
+    }
+    if(m.goAway){ try{sock.close()}catch{} return }
+    const c=m.serverContent; if(!c) return;
+    if(c.inputTranscription&&c.inputTranscription.text) onUserText(c.inputTranscription.text);
+    if(c.modelTurn&&mode==="TEXT") for(const p of (c.modelTurn.parts||[])) if(p.text&&!p.thought){ turnActive=true; feed(p.text) }
+    if(c.outputTranscription&&c.outputTranscription.text){ turnActive=true; feed(c.outputTranscription.text) }
+    if(c.turnComplete) onTurnComplete();
+  };
+  sock.onclose=ev=>{
+    if(sock!==ws||!inCall||ending) return;
+    if(!ready){
+      if(fullCfg){ fullCfg=false; return gem(mi) }
+      if(mi<1) return gem(mi+1);
+    }
+    if(++tries>6) return failCall("Connection failed. "+(ev&&ev.reason?ev.reason:"Please check your key, model name and internet."));
+    setTimeout(()=>{ if(inCall&&!ending) gem(mi) }, ready?300:1500);
+  };
+}
+
+function onTurnComplete(){
+  if(raw&&!raw.includes("[[")){ emit(raw); raw="" } else if(raw) raw="";
+  flushTurn(); turnActive=false; lastTeacherEnd=Date.now();
+  if(pendingBreak&&!ending){ pendingBreak=false; doPause(false) }
+  if(endRequested&&!ending) finishAfterSpeech();
+}
+
+function onUserText(t){
+  lastVoice=Date.now(); nudges=0; logConvo("user",t);
+  if(hw){
+    hwText+=t;
+    const tail=hwText.slice(-70);
+    if(/(homework\s+(is\s+)?(done|finished|complete)|i\s*(am|'m)\s+(done|finished)|that\s*(is|'s)\s+all|होमवर्क\s*(खत्म|ख़त्म|पूरा|हो\s*गया)|मेरा\s*(होमवर्क\s*)?(खत्म|ख़त्म|पूरा|हो\s*गया))[\s.!?\u0964]*$/i.test(tail)) finishHomework();
+  }
+}
+
+// ---------------- microphone ----------------
+async function openMic(){
+  stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+  actx=new AudioContext({sampleRate:16000});
+  const src=actx.createMediaStreamSource(stream);
+  proc=actx.createScriptProcessor(4096,1,1);
+  proc.onaudioprocess=e=>{
+    if(!ws||ws.readyState!==1||!ready||paused||ending) return;
+    if(ttsBusy()) return; // half-duplex: the teacher's own voice must never reach the microphone
+    const f=e.inputBuffer.getChannelData(0), p=new Int16Array(f.length); let sum=0;
+    for(let i=0;i<f.length;i++){ const v=Math.max(-1,Math.min(1,f[i])); p[i]=v*32767; sum+=v*v }
+    if(Math.sqrt(sum/f.length)>0.02) lastVoice=Date.now();
+    const b=new Uint8Array(p.buffer); let s="";
+    for(let i=0;i<b.length;i++) s+=String.fromCharCode(b[i]);
+    ws.send(JSON.stringify({realtimeInput:{audio:{data:btoa(s),mimeType:"audio/pcm;rate=16000"}}}));
+  };
+  src.connect(proc); proc.connect(actx.destination);
+}
+function closeMic(){
+  try{proc&&proc.disconnect()}catch{}
+  try{actx&&actx.close()}catch{}
+  try{stream&&stream.getTracks().forEach(t=>t.stop())}catch{}
+  proc=null; actx=null; stream=null;
+}
+
+// ---------------- homework, break, idle nudges ----------------
+function startHomework(){ hw=true; hwText=""; lastBackchannel=0; $("btnHW").classList.remove("hidden") }
+function finishHomework(){
+  if(!hw) return; hw=false; $("btnHW").classList.add("hidden");
+  const t=hwText.trim().slice(0,3000); hwText="";
+  sendText("[APP] The learner has finished speaking the homework. Automatic transcript (may contain errors, also trust what you heard): "+(t||"(no transcript available)")+"\nNow check the homework and give feedback following your rules.");
+}
+function doPause(byUser){
+  if(paused||ending) return; paused=true; if(byUser) hush();
+  $("btnPause").textContent="Resume";
+  sendText("[APP] The learner is now on a short break. Do not speak until they are back.");
+}
+function doResume(){
+  if(!paused) return; paused=false; $("btnPause").textContent="Pause"; lastVoice=Date.now(); lastTeacherEnd=Date.now(); nudges=0;
+  sendText("[APP] The learner is back from the break. Welcome them softly in one short sentence and continue the lesson.");
+}
+function tick(){
+  if(!inCall) return;
+  $("callStatus").textContent=statusText();
+  if(!ready||paused||ending||hw||turnActive||ttsBusy()) return;
+  const now=Date.now();
+  if(now-Math.max(lastVoice,lastTeacherEnd)>12000&&now-lastNudge>12000){
+    lastNudge=now; nudges++;
+    if(nudges>=7){ endCall(); return }
+    if(nudges===4) sendText("[APP] The learner has not answered for a long time. Ask kindly whether they are still there. If they still do not answer, say a warm goodbye, give the SUMMARY and end the call.");
+    else sendText("[APP] The learner has been silent for a while. Gently prompt them, repeat your last question more simply, or continue leading the lesson.");
+  }
+}
+
+// ---------------- start and end of a call ----------------
+async function startCall(){
+  if(inCall) return;
+  if(!D.key.trim()){ goHome("First open Settings and add your Gemini API key."); return }
+  inCall=true; ending=false; paused=false; pendingBreak=false; hw=false; hwText=""; endRequested=false; summaryGot=false; sessionSummary="";
+  ready=false; tries=0; fullCfg=true; started=false; convo=[]; buf=""; raw=""; cap=""; newTurn=true; muted=false; curRate=1; turnActive=false; nudges=0; lastNudge=0;
+  startTs=Date.now(); setCap("Connecting to your teacher…");
+  $("btnHW").classList.add("hidden"); $("btnPause").textContent="Pause";
+  show("call"); hush();
+  if(hasApp){ AndroidApp.setCaller(D.profile.teacher_name||""); AndroidApp.keepAlive(true) }
+  try{ await openMic() }catch(e){ return failCall("The microphone is not allowed. Please allow the microphone for this app and try again.") }
+  clearInterval(timerId); timerId=setInterval(tick,700);
+  gem(0);
+}
+function failCall(msg){ finalize(false,msg) }
+async function endCall(){
+  if(!inCall||ending) return;
+  ending=true; muted=true; hush(); $("callStatus").textContent="Ending the call…";
+  if(ready&&!summaryGot&&ws&&ws.readyState===1){
+    sendText("[APP] The call is ending now. Output ONLY the [[SUMMARY ...]] tag for this session, plus any last [[NOTE ...]] tags. Say nothing else.");
+    await waitFor(()=>summaryGot,7000);
+  }
+  finalize(ready);
+}
+async function finishAfterSpeech(){
+  if(ending) return; endRequested=false;
+  await waitFor(()=>!ttsBusy(),25000); await sleep(900);
+  endCall();
+}
+function finalize(record,msg){
+  if(!inCall) return; inCall=false; ending=true; clearInterval(timerId);
+  try{ws&&(ws.onclose=null,ws.close())}catch{}
+  ws=null; ready=false; closeMic(); hush(); if(hasApp) AndroidApp.keepAlive(false);
+  $("btnHW").classList.add("hidden");
+  if(record){
+    D.count++;
+    const mins=Math.max(1,Math.round((Date.now()-startTs)/60000));
+    D.sessions.push({n:D.count,date:new Date().toISOString(),minutes:mins,summary:sessionSummary||"(no summary was written)"});
+    if(D.sessions.length>SESS_MAX) D.sessions=D.sessions.slice(-SESS_MAX);
+    save();
+  }
+  hw=false; paused=false; ending=false; muted=false;
+  goHome(msg||"");
+}
+
+// ---------------- incoming call ----------------
+function showIncoming(){
+  $("incWho").textContent=(D.profile.teacher_name||"Your English teacher")+" is calling you.";
+  show("incoming");
+}
+window.onIncoming=function(){
+  if(!hasApp||inCall) return;
+  const s=AndroidApp.consumeIncoming();
+  if(s===2){ AndroidApp.answered(); startCall() }
+  else if(s===1) showIncoming();
+};
+$("btnAnswer").onclick=()=>{ if(hasApp) AndroidApp.answered(); startCall() };
+$("btnNotNow").onclick=()=>{ if(hasApp) AndroidApp.declineCall(); goHome("Your teacher will call again in a few minutes.") };
+
+// ---------------- report ----------------
+function li(text,delFn){
+  const e=document.createElement("li"); e.appendChild(document.createTextNode(text));
+  if(delFn){ const b=document.createElement("button"); b.type="button"; b.className="red small"; b.textContent="Delete"; b.setAttribute("aria-label","Delete this note: "+text.slice(0,60)); b.onclick=delFn; e.appendChild(b) }
+  return e;
+}
+const PROFILE_LABELS={user_name:"Your name",user_name_en:"Your name in English",user_gender:"Your gender",teacher_name:"Teacher's name",teacher_gender:"Teacher's gender"};
+function renderReport(){
+  const dl=$("repProfile"); dl.textContent="";
+  const keys=Object.keys(D.profile);
+  if(!keys.length){ const p=document.createElement("dd"); p.textContent="Nothing saved yet."; dl.appendChild(p) }
+  keys.forEach(k=>{ const dt=document.createElement("dt"); dt.textContent=PROFILE_LABELS[k]||k.replace(/_/g," "); const dd=document.createElement("dd"); dd.textContent=D.profile[k]; dl.append(dt,dd) });
+  $("repSchedule").textContent=scheduleText();
+  $("btnClearSched").classList.toggle("hidden",!D.schedule.length);
+  const ul=$("repNotes"); ul.textContent="";
+  if(!D.notes.length) ul.appendChild(li("No notes yet."));
+  D.notes.slice().reverse().forEach((n,i)=>{ const idx=D.notes.length-1-i; ul.appendChild(li(n.d+": "+n.t,()=>{ D.notes.splice(idx,1); save(); renderReport() })) });
+  const sl=$("repSessions"); sl.textContent="";
+  if(!D.sessions.length) sl.appendChild(li("No lessons yet."));
+  D.sessions.slice().reverse().forEach(s=>sl.appendChild(li("Lesson "+s.n+", "+s.date.slice(0,10)+", "+s.minutes+" min: "+s.summary)));
+}
+$("btnReport").onclick=()=>{ renderReport(); show("report") };
+$("btnRepBack").onclick=()=>goHome();
+$("btnClearSched").onclick=()=>{ D.schedule=[]; save(); if(hasApp) AndroidApp.setSchedule("[]"); renderReport() };
+
+// ---------------- settings ----------------
+let wipeArmed=0;
+$("btnSettings").onclick=()=>{ $("inKey").value=D.key; $("inModel").value=D.model||""; $("inModel").placeholder=DEFAULT_MODEL; $("setStatus").textContent=""; $("btnWipe").textContent="Delete my learning data"; wipeArmed=0; show("settings") };
+$("btnSave").onclick=()=>{ D.key=$("inKey").value.trim(); D.model=$("inModel").value.trim(); save(); $("setStatus").textContent="Saved. Model in use: "+modelName() };
+$("btnBattery").onclick=()=>{ if(hasApp) AndroidApp.batterySettings() };
+$("btnWipe").onclick=()=>{
+  if(!wipeArmed){ wipeArmed=1; $("btnWipe").textContent="Tap again to delete everything"; setTimeout(()=>{ if(wipeArmed){ wipeArmed=0; $("btnWipe").textContent="Delete my learning data" } },6000); return }
+  const key=D.key, model=D.model; D=blank(); D.key=key; D.model=model; save();
+  if(hasApp){ AndroidApp.setSchedule("[]"); AndroidApp.setCaller("") }
+  wipeArmed=0; $("btnWipe").textContent="Delete my learning data"; $("setStatus").textContent="Your learning data was deleted.";
+};
+$("btnSetBack").onclick=()=>goHome();
+
+// ---------------- call buttons ----------------
+$("btnCall").onclick=()=>startCall();
+$("btnEnd").onclick=()=>endCall();
+$("btnPause").onclick=()=>{ paused?doResume():doPause(true) };
+$("btnHW").onclick=()=>finishHomework();
+
+// test hooks (harmless in the app)
+window.__et={get D(){return D},feed,handleTag,speakText,splitRuns,cleanForSpeech,buildPrompt,get state(){return{inCall,hw,paused,ready,ending}}};
+
+refreshHome(); show("home");
+if(hasApp&&AndroidApp.setCaller) AndroidApp.setCaller(D.profile.teacher_name||"");
+window.onIncoming();
+})();
+</script>
+</body></html>
